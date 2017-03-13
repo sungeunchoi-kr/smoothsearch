@@ -1,7 +1,5 @@
 #include <iostream>
-//#include <NTL/ZZ_p.h>
-//#include <NTL/GF2X.h>
-//#include <NTL/GF2XFactoring.h>
+#include <vector>
 #include <NTL/ZZ_pX.h>
 #include <NTL/ZZ_pXFactoring.h>
 
@@ -43,29 +41,145 @@ int changs_poly_factor_test() {
     return 0;
 }
 
-int main(int argc, char** argv) {
-    std::string p_str("837583943092107483758343358937591");
-    ZZ p(NTL::INIT_VAL, p_str.c_str());
-    ZZ_p::init(ZZ(p));    
+const char* g_p_str = "837583943092107483758343358937591";
+const char* g_A_seed_str = "11302398300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+NTL::ZZ g_A_seed(NTL::INIT_VAL, g_A_seed_str);
+NTL::ZZ g_p = ZZ(NTL::INIT_VAL, g_p_str);
 
-ts_t t0 = get_timestamp();
-    ZZ_pX f(5, 1);
-    NTL::SetCoeff(f, 4, 12353);
-    NTL::SetCoeff(f, 3, 235723);
-    NTL::SetCoeff(f, 2, 38948);
-    NTL::SetCoeff(f, 1, 82391);
-    NTL::SetCoeff(f, 0, 289383);
+void conv_monic_poly(ZZ_pX& out_poly, const ZZ_pX& poly) {
+    //std::cout << "before: " << poly << std::endl;
+    NTL::ZZ_p q = NTL::LeadCoeff(poly);
+    const long deg = NTL::deg(poly);
+    for (long d=0; d<=deg; ++d) {
+        ZZ_p c;
+        GetCoeff(c, poly, d);
+        SetCoeff(out_poly, d, c/q);
+    }
+    //std::cout << "after: " << out_poly << std::endl;
+}
+/* usage:
+    for (int i=0; i<1; ++i)
+        generate_polys(ZZ(0), ZZ(999999), 0);
+*/
+int work_block(const NTL::ZZ& offset_start,
+                    const NTL::ZZ& offset_end,
+                    const int log) {
+    /* calculate the size of the block. */
+    long block_sz;
+    NTL::conv(block_sz, (offset_end - offset_start));
 
-    std::cout << f << std::endl;
+    /* set current modular context to `mod p`. */
+    NTL::ZZ_p::init(g_p);    
+
+    /* make a = x^5 + 2 */
+    NTL::ZZ_pX a(5, 1);
+    NTL::SetCoeff(a, 0, 2);
+
+    /* make F = x^6 + x - 44; */
+    NTL::ZZ_pX F(6, 1);
+    NTL::SetCoeff(F, 1, 1);
+    NTL::SetCoeff(F, 0, -44);
+
+    /* calculate (x^5 + 2)^offset_start `mod` F. */
+    NTL::ZZ A_seed = g_A_seed + offset_start;
+    NTL::ZZ_pX px_A = NTL::PowerMod(a, A_seed, F); // a^(A_seed) `mod` f
+
+    if (log >= 2) std::cout << px_A << std::endl;
+    if (log >= 2) std::cout << "delta is " << block_sz << "." << std::endl;
+
+    ts_t t0 = get_timestamp();
 
     vec_pair_ZZ_pX_long factors;
-    for (int i=0; i<1; ++i) {
-        NTL::CanZass(factors, f, 1);
-        std::cout << "factored: " << factors << std::endl;
-    }
+    NTL::ZZ_pX px_A_monic;
+    NTL::ZZ running_smallest_coeff(0);
+    NTL::ZZ register_a(0);
+
+    long A_offset = 0;
+    do {
+        conv_monic_poly(px_A_monic, px_A);
+        NTL::CanZass(factors, px_A_monic, 0); // px_A_monic is only missing the constant
+                                              // factor `LeadCoeff(px_A)`. `LeadCoeff(px_A)`
+                                              // is in fact the a_1*a_2*...*a_n.
+        //std::cout << "factors: " << factors << std::endl;
+        //return 0;
+
+        /* check if the polynomial is 1-smooth. */
+        bool is_one_smooth = true;
+        for (int i=0; i<factors.length(); ++i) {
+            auto factor = factors[i];
+            NTL::ZZ_pX poly = factor.a;
+            const long deg = NTL::deg(poly);
+            if (deg > 1) {
+                is_one_smooth = false;
+                break;
+            }
+        }
+
+        if (is_one_smooth) {
+            std::cout << "A=" << A_offset << "; ONE-SMOOTH: " << factors << std::endl;
+            //if (running_smallest_coeff
+            for (int i=0; i<factors.length(); ++i) {
+                auto factor = factors[i];
+                NTL::ZZ_pX poly = factor.a;
+                //std::cout << "\tConstant term: " << NTL::ConstTerm(poly) << std::endl;
+                if (running_smallest_coeff == 0) {
+                    NTL::conv(running_smallest_coeff, NTL::ConstTerm(poly));
+                    std::cout << "\tset initial running_smallest_coeff to " << running_smallest_coeff << std::endl;
+                } else {
+                    NTL::conv(register_a, NTL::ConstTerm(poly));
+                    if (register_a < running_smallest_coeff) {
+                        running_smallest_coeff = register_a;
+                        std::cout << "\tupdated running_smallest_coeff to " << running_smallest_coeff << std::endl;
+                        NTL::conv(register_a, NTL::LeadCoeff(px_A));
+                        if (register_a > running_smallest_coeff) {
+                            std::cout << "\t**** the `a_i` (" << register_a << ") is greater than `running_smallest_coeff`!" << std::endl;
+                            // then, we must factor a_i and check that each factor is lesser than `running_smallest_coeff`.
+                        }
+                    }
+                }
+            }
+        }
+
+        px_A = NTL::MulMod(px_A, a, F); // (px_A * a) `mod` F
+        A_offset++;
+    } while(A_offset <= block_sz);
+
+    if (log >= 1) std::cout << (get_timestamp() - t0) / 1000.0L << "ms." << std::endl;
+    if (log >= 1) std::cout << px_A << std::endl;
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    ZZ_p::init(ZZ(NTL::INIT_VAL, g_p_str));    
+
+ts_t t0 = get_timestamp();
+
+    const int block_sz = 0xFFF;
+    work_block(ZZ(0), ZZ(block_sz), 0);
+
 ts_t t1 = get_timestamp();
-double ms = (t1 - t0) / 1000L;
-std::cout << ms << "ms." << std::endl;
+const double ms = (t1 - t0) / 1000.0L;
+std::cout << "searched " << block_sz << " in " << ms << "ms."
+          << " (" << (65536/block_sz)*ms << "ms per standard 2^16 block size.)" << std::endl;
+
+//ts_t t0 = get_timestamp();
+//    ZZ_pX f(5, 1);
+//    NTL::SetCoeff(f, 4, 12353);
+//    NTL::SetCoeff(f, 3, 235723);
+//    NTL::SetCoeff(f, 2, 38948);
+//    NTL::SetCoeff(f, 1, 82391);
+//    NTL::SetCoeff(f, 0, 289383);
+//
+//    std::cout << f << std::endl;
+//
+//    vec_pair_ZZ_pX_long factors;
+//    for (int i=0; i<1000; ++i) {
+//        NTL::CanZass(factors, f, 0);
+//        //std::cout << "factored: " << factors << std::endl;
+//    }
+//ts_t t1 = get_timestamp();
+//double ms = (t1 - t0) / 1000L;
+//std::cout << ms << "ms." << std::endl;
 
     return 0;
 }

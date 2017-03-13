@@ -1,3 +1,3 @@
 #!/bin/bash
-g++ -O2 main.cpp -orun -L/usr/local/lib -lntl -lgmp -lm
+g++ -O2 main.cpp -orun -L. -lntl -lgmp -lm --std=c++11
 
