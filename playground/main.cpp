@@ -1,5 +1,5 @@
 #include <iostream>
-#include <vector>
+#include <sstream>
 #include <NTL/ZZ_pX.h>
 #include <NTL/ZZ_pXFactoring.h>
 
@@ -57,13 +57,18 @@ void conv_monic_poly(ZZ_pX& out_poly, const ZZ_pX& poly) {
     }
     //std::cout << "after: " << out_poly << std::endl;
 }
+
+struct search_result_t {
+    long min_A_offset;
+    NTL::ZZ minvalue;
+};
 /* usage:
-    for (int i=0; i<1; ++i)
-        generate_polys(ZZ(0), ZZ(999999), 0);
+        search_block(ZZ(0), ZZ(999999), 0);
 */
-int work_block(const NTL::ZZ& offset_start,
-                    const NTL::ZZ& offset_end,
-                    const int log) {
+search_result_t
+     search_block(const NTL::ZZ& offset_start,
+                  const NTL::ZZ& offset_end,
+                  const int log) {
     /* calculate the size of the block. */
     long block_sz;
     NTL::conv(block_sz, (offset_end - offset_start));
@@ -92,6 +97,7 @@ int work_block(const NTL::ZZ& offset_start,
     vec_pair_ZZ_pX_long factors;
     NTL::ZZ_pX px_A_monic;
     NTL::ZZ running_smallest_coeff(0);
+    long running_smallest_coeff_A_offset;
     NTL::ZZ register_a(0);
 
     long A_offset = 0;
@@ -100,7 +106,7 @@ int work_block(const NTL::ZZ& offset_start,
         NTL::CanZass(factors, px_A_monic, 0); // px_A_monic is only missing the constant
                                               // factor `LeadCoeff(px_A)`. `LeadCoeff(px_A)`
                                               // is in fact the a_1*a_2*...*a_n.
-        //std::cout << "factors: " << factors << std::endl;
+        //if (log >= 2) //std::cout << "factors: " << factors << std::endl;
         //return 0;
 
         /* check if the polynomial is 1-smooth. */
@@ -116,25 +122,19 @@ int work_block(const NTL::ZZ& offset_start,
         }
 
         if (is_one_smooth) {
-            std::cout << "A=" << A_offset << "; ONE-SMOOTH: " << factors << std::endl;
-            //if (running_smallest_coeff
+            //if (log >= 2) std::cout << "A=" << A_offset << "; ONE-SMOOTH: " << factors << std::endl;
             for (int i=0; i<factors.length(); ++i) {
                 auto factor = factors[i];
                 NTL::ZZ_pX poly = factor.a;
-                //std::cout << "\tConstant term: " << NTL::ConstTerm(poly) << std::endl;
                 if (running_smallest_coeff == 0) {
                     NTL::conv(running_smallest_coeff, NTL::ConstTerm(poly));
-                    std::cout << "\tset initial running_smallest_coeff to " << running_smallest_coeff << std::endl;
+                    if (log >= 1) std::cout << "\tset initial running_smallest_coeff to " << running_smallest_coeff << std::endl;
                 } else {
                     NTL::conv(register_a, NTL::ConstTerm(poly));
                     if (register_a < running_smallest_coeff) {
                         running_smallest_coeff = register_a;
-                        std::cout << "\tupdated running_smallest_coeff to " << running_smallest_coeff << std::endl;
-                        NTL::conv(register_a, NTL::LeadCoeff(px_A));
-                        if (register_a > running_smallest_coeff) {
-                            std::cout << "\t**** the `a_i` (" << register_a << ") is greater than `running_smallest_coeff`!" << std::endl;
-                            // then, we must factor a_i and check that each factor is lesser than `running_smallest_coeff`.
-                        }
+                        running_smallest_coeff_A_offset = A_offset;
+                        if (log >= 1) std::cout << "\tupdated running_smallest_coeff to " << running_smallest_coeff << std::endl;
                     }
                 }
             }
@@ -146,21 +146,38 @@ int work_block(const NTL::ZZ& offset_start,
 
     if (log >= 1) std::cout << (get_timestamp() - t0) / 1000.0L << "ms." << std::endl;
     if (log >= 1) std::cout << px_A << std::endl;
-    return 0;
+
+    search_result_t r;
+    r.min_A_offset = running_smallest_coeff_A_offset;
+    r.minvalue = running_smallest_coeff;
+    return r;
 }
 
 int main(int argc, char** argv) {
+    //const int BLOCK_SZ = 1000;
+    const int BLOCK_SZ = 65536;
     ZZ_p::init(ZZ(NTL::INIT_VAL, g_p_str));    
 
-ts_t t0 = get_timestamp();
+    if (argc < 2) {
+        fprintf(stderr, "Provide block address.\n");
+        exit(1);
+    }
 
-    const int block_sz = 0xFFF;
-    work_block(ZZ(0), ZZ(block_sz), 0);
+    ts_t t0 = get_timestamp();
 
-ts_t t1 = get_timestamp();
-const double ms = (t1 - t0) / 1000.0L;
-std::cout << "searched " << block_sz << " in " << ms << "ms."
-          << " (" << (65536/block_sz)*ms << "ms per standard 2^16 block size.)" << std::endl;
+    ZZ alpha(NTL::INIT_VAL, argv[1]);
+    ZZ omega(alpha + BLOCK_SZ);
+
+    const search_result_t result = search_block(alpha, omega, 0);
+
+    ts_t t1 = get_timestamp();
+    const double ms = (t1 - t0) / 1000.0L;
+    //std::cout << "searched " << BLOCK_SZ << " in " << ms << "ms."
+    //          << " (" << (65536/BLOCK_SZ)*ms << "ms per standard 2^16 block size.)" << std::endl;
+
+    std::cout << result.minvalue << ":" << result.min_A_offset;
+    return 0;
+}
 
 //ts_t t0 = get_timestamp();
 //    ZZ_pX f(5, 1);
@@ -177,13 +194,10 @@ std::cout << "searched " << block_sz << " in " << ms << "ms."
 //        NTL::CanZass(factors, f, 0);
 //        //std::cout << "factored: " << factors << std::endl;
 //    }
+
 //ts_t t1 = get_timestamp();
 //double ms = (t1 - t0) / 1000L;
 //std::cout << ms << "ms." << std::endl;
-
-    return 0;
-}
-
 /*NTL_CLIENT
 long getSmoothness(const GF2X& f) {
 	static vec_pair_GF2X_long r;
