@@ -172,8 +172,8 @@ int main(int argc, char** argv) {
 
     ts_t t1 = get_timestamp();
     const double ms = (t1 - t0) / 1000.0L;
-    //std::cout << "searched " << BLOCK_SZ << " in " << ms << "ms."
-    //          << " (" << (65536/BLOCK_SZ)*ms << "ms per standard 2^16 block size.)" << std::endl;
+    std::cerr << "searched " << BLOCK_SZ << " in " << ms << "ms."
+              << " (" << (65536/BLOCK_SZ)*ms << "ms per standard 2^16 block size.)" << std::endl;
 
     std::cout << result.minvalue << ":" << result.min_A_offset;
     return 0;

@@ -1,56 +1,21 @@
 #include <iostream>
 #include <iomanip>
 #include <sstream>
-//#include <NTL/ZZ_pX.h>
-//#include <NTL/ZZ_pXFactoring.h>
+#include <ctime>
 #include "global.h"
 #include "get_timestamp.h"
 #include "integer_factor.h"
 #include "tests.h"
 
-/*----------------------------------------------------------------*/
-/*using namespace NTL;
-void PowerXModOptimized(NTL::ZZ_pX& hh, const NTL::ZZ& e, const NTL::ZZ_pXModulus& F) {
-    long n = NumBits(e);
-    long i;
-    NTL::ZZ_pX h, h1;
-    h.SetMaxLength(F.n);
-    set(h);
-    for (i=n-1; i>=0; i--) {
-        if (bit(e, i)) {
-            SqrMod(h1, h, F);
-            MulByXMod(h, h1, F);
-        } else {
-            SqrMod(h, h, F);
-        }
-    }
-    hh = h;
-}*/
-
-/*
-    a: the polynomial we are trying to factor.
-*/
-int ctr = 0;
-void form_Q(const NTL::ZZ_pX& a, const int deg_a) {
-    //NTL::ZZ_pXModulus A;
-    //build(A, a);
-
-    //NTL::ZZ_pX h[deg_a];
-    NTL::ZZ_pX h;
-
-    ctr++;
-    NTL::PowerXMod(h, g_p, a);
-
-    //for (int i=1; i<deg_a; ++i) {
-    //    NTL::PowerXMod(h[i], g_p*i, A);
-    //}
-
-    //for (int i=1; i<deg_a; ++i) {
-    //    std::cout << h[i] << std::endl;
-    //}
+char iso8601_timestamp_buf__[sizeof "2011-10-08T07:07:09Z"];
+const char* get_iso8601_timestamp(void) {
+    time_t now;
+    time(&now);
+    strftime(iso8601_timestamp_buf__, sizeof iso8601_timestamp_buf__, "%FT%TZ", gmtime(&now));
+    // this will work too, if your compiler doesn't support %F or %T:
+    //strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%SZ", gmtime(&now));
+    return iso8601_timestamp_buf__;
 }
-/*----------------------------------------------------------------*/
-
 
 void conv_monic_poly_time(NTL::ZZ_pX& out_poly, const NTL::ZZ_pX& poly) {
     const ts_t t0 = get_timestamp();
@@ -81,55 +46,23 @@ void conv_monic_poly(NTL::ZZ_pX& out_poly, const NTL::ZZ_pX& poly) {
 struct search_result_t {
     long min_A_offset;
     NTL::ZZ minvalue;
-    std::string debug_message;
 };
 
 search_result_t
-     search_block_doing_nothing(const NTL::ZZ& offset_start,
-                                const NTL::ZZ& offset_end,
-                                const int log) {
-    long block_sz;
-    NTL::conv(block_sz, (offset_end - offset_start));
-    long A_offset = 0;
-    do {
-        A_offset++;
-    } while(A_offset <= block_sz);
-    search_result_t r; {
-        r.min_A_offset = 0;
-        r.minvalue = 0;
-    }
-    return r;
-}
-
-/* usage:
-        search_block(ZZ(0), ZZ(999999), 0);
-*/
-search_result_t
-     search_block_method_1(const NTL::ZZ& offset_start,
-                           const NTL::ZZ& offset_end,
-                           const int log) {
+    search_block_method_1(const NTL::ZZ& page_address,
+                          const long page_size) {
     /* calculate the size of the block. */
-    long block_sz;
-    NTL::conv(block_sz, (offset_end - offset_start));
+    const long block_sz = page_size;
 
-    /* set current modular context to `mod p`. */
-    NTL::ZZ_p::init(g_p);    
+    /* NOTE: g_p5 = x^5 + 2 */
+    /* NOTE: g_F = x^6 + x - 44; */
 
-    /* make a = x^5 + 2 */
-    NTL::ZZ_pX a(5, 1);
-    NTL::SetCoeff(a, 0, 2);
+    /* calculate (x^5 + 2)^offset_start `mod` g_F. */
+    NTL::ZZ A_seed = g_A_seed + (page_address * page_size);
+    NTL::ZZ_pX px_A = NTL::PowerMod(g_p5, A_seed, g_F); // g_p5^A_seed) `mod` f
 
-    /* make F = x^6 + x - 44; */
-    NTL::ZZ_pX F(6, 1);
-    NTL::SetCoeff(F, 1, 1);
-    NTL::SetCoeff(F, 0, -44);
-
-    /* calculate (x^5 + 2)^offset_start `mod` F. */
-    NTL::ZZ A_seed = g_A_seed + offset_start;
-    NTL::ZZ_pX px_A = NTL::PowerMod(a, A_seed, F); // a^(A_seed) `mod` f
-
-    if (log >= 2) std::cout << px_A << std::endl;
-    if (log >= 2) std::cout << "delta is " << block_sz << "." << std::endl;
+    // std::cerr << px_A << std::endl;
+    // std::cerr << "delta is " << block_sz << "." << std::endl;
 
     ts_t t0 = get_timestamp();
 
@@ -137,28 +70,28 @@ search_result_t
     NTL::ZZ bs[8];
     int bs_len;
     NTL::ZZ_pX px_A_monic;
-    NTL::ZZ running_min(NTL::INIT_VAL, "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    NTL::ZZ running_min(NTL::INIT_VAL, "10000000000000000000000000000000000000000000000000");
     long running_smallest_coeff_A_offset;
     NTL::ZZ register_a(0);
 
     long A_offset = 0;
     do {
-        if (log >= 1) std::cerr << std::hex << "A_offset=" << A_offset << "\n";
+        // std::cerr << std::hex << "A_offset=" << A_offset << "\n";
         conv_monic_poly(px_A_monic, px_A);
 
         const bool is_splitting =
             NTL::CanZassShortCircuit(bs, &bs_len, px_A_monic);
         if (is_splitting) {
-            //std::cout << "A_offset = " << A_offset << std::endl;
+            //std::cerr << "A_offset = " << A_offset << std::endl;
             //for (int k=0; k<bs_len; ++k) {
-            //    std::cout << "    bs["<<k<<"] = " << bs[k] << std::endl;
+            //    std::cerr << "    bs["<<k<<"] = " << bs[k] << std::endl;
             //}
 
             /* get the max */
             bool a_is_max = true;
             NTL::ZZ local_max;
             NTL::conv(local_max, NTL::LeadCoeff(px_A));
-            //std::cout << "    a     = " << local_max << std::endl;
+            //std::cerr << "    g_p5     = " << local_max << std::endl;
             for (int k=0; k<bs_len; ++k) {
                 if (bs[k] > local_max) {
                     local_max = bs[k];
@@ -166,7 +99,7 @@ search_result_t
                 }
             }
 
-            /* if 'a' is the max, then we factorize it to see if
+            /* if 'g_p5' is the max, then we factorize it to see if
                we can do better. */
             if (a_is_max) {
                 std::stringstream ss;
@@ -176,37 +109,37 @@ search_result_t
                 NTL::ZZ new_local_max = NTL::ZZ(NTL::INIT_VAL, factor);
                 free(factor);
 
-                //std::cout << "new_local_max = " << new_local_max << std::endl;
+                //std::cerr << "new_local_max = " << new_local_max << std::endl;
 
                 /* now, we try to find max again using new_local_max 
                    as running-max initializer. */
-                //std::cout << "    a     = " << local_max << std::endl;
+                //std::cerr << "    g_p5     = " << local_max << std::endl;
                 for (int k=0; k<bs_len; ++k) {
                     if (bs[k] > new_local_max) {
                         new_local_max = bs[k];
                     }
                 }
-                //std::cout << "new_local_max (after max search) = " << new_local_max << std::endl;
+                //std::cerr << "new_local_max (after max search) = " << new_local_max << std::endl;
                 if (new_local_max < running_min) {
                     running_min = new_local_max;
                     running_smallest_coeff_A_offset = A_offset;
                 }
             } else {
-                //std::cout << "    lcmax = " << local_max << std::endl;
+                //std::cerr << "    lcmax = " << local_max << std::endl;
                 if (local_max < running_min) {
                     running_min = local_max;
                     running_smallest_coeff_A_offset = A_offset;
                 }
             }
-            std::cout << "    glmin = " << running_min << ';' << running_smallest_coeff_A_offset << std::endl;
+            //std::cerr << "    glmin = " << running_min << ';' << running_smallest_coeff_A_offset << std::endl;
         }
 
-        px_A = NTL::MulMod(px_A, a, F); // (px_A * a) `mod` F
+        px_A = NTL::MulMod(px_A, g_p5, g_F); // (px_A * g_p5) `mod` g_F
         A_offset++;
-    } while(A_offset <= block_sz);
+    } while(A_offset < block_sz);
 
-    if (log >= 1) std::cout << (get_timestamp() - t0) / 1000.0L << "ms." << std::endl;
-    if (log >= 1) std::cout << px_A << std::endl;
+    // std::cerr << (get_timestamp() - t0) / 1000.0L << "ms." << std::endl;
+    // std::cerr << px_A << std::endl;
 
     search_result_t r;
     r.min_A_offset = running_smallest_coeff_A_offset;
@@ -214,96 +147,25 @@ search_result_t
     return r;
 }
 
-search_result_t
-     search_block_method_2(const NTL::ZZ& offset_start,
-                           const NTL::ZZ& offset_end,
-                           const int log) {
-    /* calculate the size of the block. */
-    unsigned long block_sz;
-    NTL::conv(block_sz, (offset_end - offset_start));
-
-    /* set current modular context to `mod p`. */
-    NTL::ZZ_p::init(g_p);    
-
-    /* make a = x^5 + 2 */
-    NTL::ZZ_pX a(5, 1);
-    NTL::SetCoeff(a, 0, 2);
-
-    /* make F = x^6 + x - 44; */
-    NTL::ZZ_pX F(6, 1);
-    NTL::SetCoeff(F, 1, 1);
-    NTL::SetCoeff(F, 0, -44);
-
-    /* calculate (x^5 + 2)^offset_start `mod` F. */
-    NTL::ZZ A_seed = g_A_seed + offset_start;
-    NTL::ZZ_pX px_A = NTL::PowerMod(a, A_seed, F); // a^(A_seed) `mod` f
-
-    if (log >= 2) std::cout << px_A << std::endl;
-    if (log >= 2) std::cout << "delta is " << block_sz << "." << std::endl;
-
-    ts_t t0 = get_timestamp();
-
-    NTL::vec_pair_ZZ_pX_long factors;
-    NTL::ZZ_pX px_A_monic;
-    NTL::ZZ running_smallest_coeff(0);
-    long running_smallest_coeff_A_offset;
-    NTL::ZZ register_a(0);
-
-    long A_offset = 0;
-    do {
-        //std::cout << px_A << std::endl;
-        conv_monic_poly(px_A_monic, px_A);
-        form_Q(px_A_monic, deg(px_A_monic));
-
-        px_A = NTL::MulMod(px_A, a, F); // (px_A * a) `mod` F
-        A_offset++;
-    } while(A_offset <= block_sz);
-
-    if (log >= 1) std::cout << (get_timestamp() - t0) / 1000.0L << "ms." << std::endl;
-    if (log >= 1) std::cout << px_A << std::endl;
-
-    search_result_t r;
-    r.min_A_offset = running_smallest_coeff_A_offset;
-    r.minvalue = running_smallest_coeff;
-    return r;
-}
-
-void test_method_1(void) {
-    //const unsigned long BLOCK_SZ = 65536L*65536L;
-    const unsigned long BLOCK_SZ = 65536L;
-    //const int BLOCK_SZ = 1024;
-    //const int BLOCK_SZ = 1;
+const long PAGE_SZ = 65536L;
+void run_search_min(const char* page_address_cstr, const char* proc_name) {
     const ts_t t0 = get_timestamp();
-        NTL::ZZ alpha(NTL::INIT_VAL, "44720719489781720990584648073320583148022340924048099619983541600598964895479283398724586905988448450908371");
-        NTL::ZZ omega(alpha + BLOCK_SZ);
-        const search_result_t result =
-            search_block_method_1(alpha, omega, 0);
+
+    const NTL::ZZ page_address(NTL::INIT_VAL, page_address_cstr);
+    const search_result_t result =
+        search_block_method_1(page_address, PAGE_SZ);
+
     const ts_t t1 = get_timestamp();
     const double ms = (t1 - t0) / 1000.0L;
-    std::cerr << "test method_1: searched " << BLOCK_SZ << " in " << ms << "ms."
-              << " (" << (65536/BLOCK_SZ)*ms << "ms per standard 2^16 block size.)" << std::endl;
-    std::cerr << "\tfound minval: " << result.minvalue << ":" << result.min_A_offset << std::endl
-              << "timing message:\n"
-              << result.debug_message << std::endl;
-    return;
-}
+    std::cerr << "test method_1: searched " << PAGE_SZ << " in " << ms << "ms."
+              << " (" << (65536/PAGE_SZ)*ms << "ms per standard 2^16 block size.)" << std::endl;
 
-void test_method_2(void) {
-    //const int BLOCK_SZ = 65536;
-    //const int BLOCK_SZ = 1024;
-    const int BLOCK_SZ = 1;
-    const ts_t t0 = get_timestamp();
-        NTL::ZZ alpha(NTL::INIT_VAL, "44720719489781720990584648073320583148022340924048099619983541600598964895479283398724586905988448450908371");
-        NTL::ZZ omega(alpha + BLOCK_SZ);
-        const search_result_t result =
-            search_block_method_2(alpha, omega, 0);
-    const ts_t t1 = get_timestamp();
-    const double ms = (t1 - t0) / 1000.0L;
-    std::cerr << "test method_2: searched " << BLOCK_SZ << " in " << ms << "ms."
-              << " (" << (65536/BLOCK_SZ)*ms << "ms per standard 2^16 block size.)" << std::endl;
-    std::cerr << "\tfound minval: " << result.minvalue << ":" << result.min_A_offset << std::endl
-              << "timing message:\n"
-              << result.debug_message << std::endl;
+    /* print result to stdout */
+    std::cout << result.minvalue         << ","
+              << result.min_A_offset     << ","
+              << page_address_cstr       << ","
+              << get_iso8601_timestamp() << ","
+              << proc_name               << std::endl;
     return;
 }
 
@@ -312,19 +174,12 @@ int main(int argc, char** argv) {
        we will be using. see `global.h`. */
     initialize_global_state();
     std::cerr << "program initialized successfully.\n";
-
-    const int BLOCK_SZ = 1000;
-    //const int BLOCK_SZ = 65536;
-
-    if (argc < 2) {
-        fprintf(stderr, "Provide block address.\n");
+    if (argc < 3) {
+        fprintf(stderr, "Usage: program (page-address) (process_name)\n");
         exit(1);
     }
 
-    test_method_1();
-    //test_method_2();
-
-    std::cout << "ctr = " << ctr << std::endl;
+    run_search_min(argv[1], argv[2]);
     return 0;
 }
 
